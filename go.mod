@@ -10,4 +10,6 @@ require (
 	github.com/redis/go-redis/v9 v9.5.1 // indirect
 )
 
-replace github.com/wau/registry => /home/inamoto888/project/wau-registry
+replace github.com/wau/registry => ../wau-registry
+
+replace github.com/wau/registry/registry => ../wau-registry/registry

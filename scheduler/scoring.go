@@ -3,15 +3,17 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/wau/registry/registry"
 )
 
-// ScoringEngine 评分引擎
+// ScoringEngine 评分引擎 (线程安全)
 type ScoringEngine struct {
 	reg     *registry.RedisStore
 	weights Weights
 	logger  *slog.Logger
+	mu      sync.RWMutex // 保护并发访问
 }
 
 // NewScoringEngine 创建评分引擎
@@ -31,8 +33,11 @@ type ScoreRequest struct {
 	SourceUniverse string
 }
 
-// ScoreAgents 对Agent列表进行评分
+// ScoreAgents 对Agent列表进行评分 (线程安全)
 func (e *ScoringEngine) ScoreAgents(ctx context.Context, agentIDs []string, req *ScoreRequest) ([]AgentScore, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
 	var scores []AgentScore
 
 	for _, agentID := range agentIDs {
