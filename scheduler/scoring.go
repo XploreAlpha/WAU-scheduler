@@ -10,14 +10,14 @@ import (
 
 // ScoringEngine 评分引擎 (线程安全)
 type ScoringEngine struct {
-	reg     *registry.RedisStore
+	reg     registry.Registry
 	weights Weights
 	logger  *slog.Logger
 	mu      sync.RWMutex // 保护并发访问
 }
 
 // NewScoringEngine 创建评分引擎
-func NewScoringEngine(reg *registry.RedisStore, logger *slog.Logger) *ScoringEngine {
+func NewScoringEngine(reg registry.Registry, logger *slog.Logger) *ScoringEngine {
 	return &ScoringEngine{
 		reg:     reg,
 		weights: DefaultWeights(),
