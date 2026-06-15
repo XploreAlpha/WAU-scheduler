@@ -12,13 +12,14 @@ import (
 // TestScoringEngine_15Dim_Integration 集成测试(11 维全真算 + 4 维占位 → W1 末状态)
 //
 // 这是 v0.7.0 W1 末的关键集成测试:
-//   - 用 MemoryDataSource 注入所有 11 维数据
+//   - 用 MemoryDataSource 注入所有 15 维数据
 //   - 跑 3 个 agent 的 ScoreAgents
 //   - 验证:
-//     1. 7 维真算值正确(不是占位)
-//     2. TrustScore / Availability / VersionCompat / GeoPenalty 仍用占位
-//     3. TotalScore 由 15 维度加权得到
-//     4. 排序正确(Trust 最高的排第一)
+//     1. 11 维真算值正确(不是占位)
+//     2. Availability / VersionCompat / GeoPenalty 也已真算(用 Redis/Memory DS)
+//     3. TrustScore 通过 wau-trust (WauTrustDataSource 包装器),失败降级 0.5
+//     4. TotalScore 由 15 维度加权得到
+//     5. 排序正确(Trust 最高的排第一)
 func TestScoringEngine_15Dim_Integration(t *testing.T) {
 	ctx := context.Background()
 	logger := testLogger()

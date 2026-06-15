@@ -96,7 +96,9 @@ func (e *ScoringEngine) scoreAgent(ctx context.Context, agentID string, req *Sco
 		// 1. Skill匹配度 (0-1) — 已有,W1 维持
 		SkillMatch: e.calcSkillMatch(card.Skills, req.RequiredSkills),
 
-		// 2. Trust分数 (0-1) — W1 占位 0.5;W2 接 wau-trust
+		// 2. Trust分数 (0-1) — W1 末已接 wau-trust(WauTrustDataSource 包装器),
+		// 失败时降级到 0.5(无数据 default),保持向后兼容
+		// v0.7.0 W2 进一步通过 HTTP endpoint `GET /registry/agents/{name}/trust` 暴露
 		TrustScore: e.dimensionTrustScore(ctx, agentID),
 
 		// 3. 健康状态 (0-1) — 已有,W1 维持
@@ -129,13 +131,13 @@ func (e *ScoringEngine) scoreAgent(ctx context.Context, agentID string, req *Sco
 		// 12. 错误率 (0-1) — v0.7.0 W1 真算(从 errors:last100)
 		ErrorRate: e.dimensionErrorRate(ctx, agentID),
 
-		// 13. 可用性 (0-1) — W1 占位 1.0;W2 真算(uptime ratio)
+		// 13. 可用性 (0-1) — W1 末已真算:LastSeen/FirstSeen uptime ratio(Redis/Memory DS)
 		Availability: e.dimensionAvailability(ctx, agentID),
 
-		// 14. 版本兼容性 (0-1) — W1 占位 1.0;W2 真算(semver)
+		// 14. 版本兼容性 (0-1) — W1 末已真算:semver 同 major → 1.0,跨 major 衰减(Redis/Memory DS)
 		VersionCompat: e.dimensionVersionCompat(ctx, agentID),
 
-		// 15. 地理位置惩罚 (0.9-1.0) — W1 占位 1.0;W2 真算(region)
+		// 15. 地理位置惩罚 (0.9-1.0) — W1 末已真算:同 region → 1.0,跨 region → 0.9(Redis/Memory DS)
 		GeoPenalty: e.dimensionGeoPenalty(ctx, agentID, req.SourceRegion),
 	}
 
