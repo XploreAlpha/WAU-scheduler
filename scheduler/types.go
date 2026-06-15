@@ -44,21 +44,21 @@ type ScheduleResult struct {
 
 // Weights 15维度权重配置
 type Weights struct {
-	SkillMatch      float64 // 0.25
-	TrustScore      float64 // 0.20
-	HealthScore     float64 // 0.15
-	LatencyScore    float64 // 0.10
-	LoadScore       float64 // 0.08
-	SuccessRate     float64 // 0.07
-	NetworkPenalty  float64 // 0.05
-	BandwidthScore  float64 // 0.03
-	AuthLevel       float64 // 0.02
-	ProtocolCompat   float64 // 0.02
-	HistoryCount     float64 // 0.01
-	ErrorRate        float64 // 0.01
-	Availability     float64 // 0.005
-	VersionCompat    float64 // 0.005
-	GeoPenalty       float64 // 0.005
+	SkillMatch     float64 // 0.25
+	TrustScore     float64 // 0.20
+	HealthScore    float64 // 0.15
+	LatencyScore   float64 // 0.10
+	LoadScore      float64 // 0.08
+	SuccessRate    float64 // 0.07
+	NetworkPenalty float64 // 0.05
+	BandwidthScore float64 // 0.03
+	AuthLevel      float64 // 0.02
+	ProtocolCompat float64 // 0.02
+	HistoryCount   float64 // 0.01
+	ErrorRate      float64 // 0.01
+	Availability   float64 // 0.005
+	VersionCompat  float64 // 0.005
+	GeoPenalty     float64 // 0.003 (v0.7.0 修复:让总和 = 1.000)
 }
 
 // DefaultWeights 返回默认权重
@@ -78,7 +78,7 @@ func DefaultWeights() Weights {
 		ErrorRate:      0.01,
 		Availability:   0.005,
 		VersionCompat:  0.005,
-		GeoPenalty:    0.005,
+		GeoPenalty:     0.0, // v0.7.0 修复:让总和 = 1.000(W2 接 AgentMeta.Region 后再启用)
 	}
 }
 
