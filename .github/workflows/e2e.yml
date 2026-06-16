@@ -1,0 +1,62 @@
+name: e2e
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'scheduler/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/e2e.yml'
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  user-scenarios-e2e:
+    name: TestUser_U1-U10 (scheduler e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Create monorepo workspace
+        # 方案 B(拍板): monorepo checkout
+        # 把当前 wau-scheduler 移成 wau-scheduler 子目录,平级拉 wau-trust + wau-registry
+        # CI 临时 sed 改 replace 指令,go.mod 不变
+        run: |
+          mkdir -p /tmp/wau-monorepo
+          shopt -s dotglob
+          mv * /tmp/wau-monorepo/ 2>/dev/null || true
+          mv .git /tmp/wau-monorepo/ 2>/dev/null || true
+          shopt -u dotglob
+          git clone --depth 1 . /tmp/wau-monorepo/wau-scheduler
+          git clone --depth 1 https://github.com/XploreAlpha/wau-trust.git /tmp/wau-monorepo/wau-trust
+          git clone --depth 1 https://github.com/XploreAlpha/wau-registry.git /tmp/wau-monorepo/wau-registry
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Patch go.mod replace directives
+        # 把绝对路径 /home/inamoto888/... 改成 monorepo 平级路径
+        working-directory: /tmp/wau-monorepo/wau-scheduler
+        run: |
+          sed -i 's|replace github.com/XploreAlpha/wau-trust => /home/inamoto888/project/wau-trust|replace github.com/XploreAlpha/wau-trust => ../wau-trust|' go.mod
+          sed -i 's|replace github.com/wau/registry => ../wau-registry|replace github.com/wau/registry => ../wau-registry|' go.mod
+          sed -i 's|replace github.com/wau/registry/registry => ../wau-registry/registry|replace github.com/wau/registry/registry => ../wau-registry/registry|' go.mod
+          cat go.mod
+
+      - name: Show Go version
+        run: go version
+
+      - name: Run TestUser_U1-U10 with -race
+        # H4-2 主验收:10 个 user scenarios e2e 全 PASS + race-free
+        working-directory: /tmp/wau-monorepo/wau-scheduler
+        run: go test -race -count=1 -v -run "TestUser_" ./scheduler/
+
+      - name: Run full scheduler test suite (regression)
+        # 业务场景 five_scenarios + scoring + user_scenarios 一起回归
+        working-directory: /tmp/wau-monorepo/wau-scheduler
+        run: go test -race -count=1 ./scheduler/...
