@@ -92,6 +92,18 @@ type DataSource interface {
 	// Returns 0.5 if no data.
 	TrustScore(ctx context.Context, agentID string) (float64, error)
 
+	// IsCold reports whether the agent has NO trust history (v0.8.0 M4-1).
+	//
+	// Returns true when:
+	//   - The agent has never had any trust-relevant data recorded
+	//     (no RecordSuccess / RecordFailure / Reset in wau-trust, and
+	//     no latency / success / errors / bandwidth in scheduler's metrics)
+	//
+	// Used by cold routing (v0.8.0 M4-1.3) to identify "fresh" agents
+	// that should be explored to accumulate data, vs "warm" agents
+	// that can be ranked normally on the 15-dim scoring framework.
+	IsCold(ctx context.Context, agentID string) (bool, error)
+
 	// ===== Agent metadata =====
 
 	// GetMeta returns extended metadata for the agent.

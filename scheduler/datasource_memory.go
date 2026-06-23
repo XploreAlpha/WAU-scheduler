@@ -301,6 +301,27 @@ func (d *MemoryDataSource) TrustScore(ctx context.Context, agentID string) (floa
 	return val, nil
 }
 
+// IsCold reports whether the agent has no trust history (v0.8.0 M4-1).
+//
+// Implementation: aligns with wau-trust's Engine.IsCold — only checks the
+// trust key. Cold routing's primary goal is to give fresh agents a chance
+// to accumulate trust data; once trust is recorded (even 1 RecordSuccess),
+// the agent is no longer cold from a routing perspective.
+//
+// Why NOT also check tasks:total / metrics:
+//   - Trust signal is the canonical "data exists" indicator for cold routing
+//   - Metrics can lag behind trust (e.g. trust updated by external watchdog
+//     before any L4 handler task runs) — we don't want to mis-classify such
+//     agents as cold when wau-trust already considers them warm
+//   - Keeping the semantics aligned with wau-trust.IsCold means callers
+//     (cold routing policy in M4-1.3) get a single, consistent signal
+func (d *MemoryDataSource) IsCold(ctx context.Context, agentID string) (bool, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	_, hasTrust := d.trustScores[agentID]
+	return !hasTrust, nil
+}
+
 // GetMeta returns extended agent metadata.
 func (d *MemoryDataSource) GetMeta(ctx context.Context, agentID string) (AgentMeta, error) {
 	d.mu.RLock()
