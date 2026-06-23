@@ -104,6 +104,20 @@ type DataSource interface {
 	// that can be ranked normally on the 15-dim scoring framework.
 	IsCold(ctx context.Context, agentID string) (bool, error)
 
+	// IsAsleep reports whether the agent is currently marked asleep (v0.8.0 M4-2).
+	//
+	// Returns true when:
+	//   - The agent has been put to sleep via wau-trust Engine.Sleep
+	//     and has not been woken yet (either via Wake or via Reset).
+	//
+	// Distinct from IsCold: a cold agent (no trust data) is NOT asleep —
+	// it just has no data. An asleep agent has trust data but is currently
+	// excluded from scheduling to save resources (low utilization window).
+	//
+	// Used by sleep policy (v0.8.0 M4-2.2) to filter asleep agents out of
+	// the scheduling pool and to identify wake candidates during demand spikes.
+	IsAsleep(ctx context.Context, agentID string) (bool, error)
+
 	// ===== Agent metadata =====
 
 	// GetMeta returns extended metadata for the agent.

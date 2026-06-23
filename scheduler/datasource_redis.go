@@ -308,6 +308,22 @@ func (d *RedisDataSource) IsCold(ctx context.Context, agentID string) (bool, err
 	return n == 0, nil
 }
 
+// IsAsleep reports whether the agent is currently asleep (v0.8.0 M4-2).
+//
+// Implementation: aligns with wau-trust's Engine.IsAsleep — single EXISTS on
+// `trust:{name}:asleep`. O(1) Redis check, identical pattern to IsCold.
+//
+// Production paths: the WauTrustDataSource delegates to wau-trust engine
+// directly (the canonical signal). This local implementation is for tests
+// and for deployments that don't yet use wau-trust as the sleep state owner.
+func (d *RedisDataSource) IsAsleep(ctx context.Context, agentID string) (bool, error) {
+	n, err := d.client.Exists(ctx, d.key(agentID, "asleep")).Result()
+	if err != nil {
+		return false, fmt.Errorf("isAsleep for %s: %w", agentID, err)
+	}
+	return n == 1, nil
+}
+
 // GetMeta returns extended agent metadata.
 //
 // v0.7.0 W1: derived from AgentCard + defaults. W2 will extend

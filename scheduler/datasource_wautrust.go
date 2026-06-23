@@ -74,6 +74,25 @@ func (d *WauTrustDataSource) IsCold(ctx context.Context, agentID string) (bool, 
 	return cold, nil
 }
 
+// IsAsleep delegates to wau-trust's engine.IsAsleep (v0.8.0 M4-2).
+//
+// wau-trust's Engine.IsAsleep is the canonical sleep state owner — agents
+// are marked asleep via wau-trust Engine.Sleep and woken via Wake (or
+// implicitly via Reset).
+//
+// On error: we return false (treat as awake) to avoid blocking routing —
+// sleep is a resource-saving optimization, not a correctness requirement.
+// An asleep agent falsely treated as awake will get scheduled normally;
+// the worst case is we lose some efficiency, not correctness.
+func (d *WauTrustDataSource) IsAsleep(ctx context.Context, agentID string) (bool, error) {
+	asleep, err := d.trust.IsAsleep(ctx, agentID)
+	if err != nil {
+		// Conservative: treat as awake on error (avoid blocking routing)
+		return false, err
+	}
+	return asleep, nil
+}
+
 // ===== Delegated methods (1:1 pass-through) =====
 
 func (d *WauTrustDataSource) LatencyScore(ctx context.Context, agentID string) (float64, error) {

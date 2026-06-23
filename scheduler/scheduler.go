@@ -19,6 +19,10 @@ type Scheduler struct {
 	// nil = 现有行为(全 warm 池,15 维打分,向后兼容 v0.7.x)
 	coldPolicy *ColdRoutingPolicy
 
+	// sleepPolicy is the sleep/wake policy (v0.8.0 M4-2.2).
+	// nil = 现有行为(不过滤 asleep agents,向后兼容 v0.7.x + M4-1.4)
+	sleepPolicy *SleepPolicy
+
 	mu      sync.RWMutex
 	running bool
 	stopCh  chan struct{}
@@ -31,6 +35,7 @@ func NewScheduler(reg *registry.RedisStore, logger *slog.Logger) *Scheduler {
 		scoring:    NewScoringEngine(reg, logger),
 		logger:     logger,
 		coldPolicy: nil,
+		sleepPolicy: nil,
 		stopCh:     make(chan struct{}),
 	}
 }
@@ -46,6 +51,7 @@ func NewSchedulerWithRegistry(reg registry.Registry, logger *slog.Logger) *Sched
 		scoring:    NewScoringEngine(reg, logger),
 		logger:     logger,
 		coldPolicy: nil,
+		sleepPolicy: nil,
 		stopCh:     make(chan struct{}),
 	}
 }
@@ -65,6 +71,50 @@ func NewSchedulerWithColdPolicy(reg registry.Registry, logger *slog.Logger, cold
 		scoring:    NewScoringEngine(reg, logger),
 		logger:     logger,
 		coldPolicy: coldPolicy,
+		sleepPolicy: nil,
+		stopCh:     make(chan struct{}),
+	}
+}
+
+// NewSchedulerWithSleepPolicy creates a scheduler with BOTH cold and sleep
+// policies enabled (v0.8.0 M4-2.2).
+//
+// This is the recommended constructor for v0.8.0 production deployments
+// that want the full W-3 智慧 initial set (cold routing + sleep/wake).
+//
+// Either policy may be nil — both are optional. nil cold policy = no
+// cold routing (15-dim ranking only); nil sleep policy = no sleep filter
+// (all agents considered, regardless of awake/asleep state).
+//
+// Usage:
+//
+//	coldPolicy := scheduler.NewColdRoutingPolicy(0.10, 10, 0.5, logger)
+//	sleepPolicy := scheduler.NewSleepPolicy(logger)
+//	s := scheduler.NewSchedulerWithSleepPolicy(reg, logger, coldPolicy, sleepPolicy)
+//	result, _ := s.Schedule(ctx, req)
+func NewSchedulerWithSleepPolicy(reg registry.Registry, logger *slog.Logger, coldPolicy *ColdRoutingPolicy, sleepPolicy *SleepPolicy) *Scheduler {
+	return &Scheduler{
+		reg:         reg,
+		scoring:     NewScoringEngine(reg, logger),
+		logger:      logger,
+		coldPolicy:  coldPolicy,
+		sleepPolicy: sleepPolicy,
+		stopCh:      make(chan struct{}),
+	}
+}
+
+// NewSchedulerWithScoring creates a scheduler with a custom ScoringEngine
+// (v0.8.0 M4-2.2).
+//
+// Useful for tests that need a custom DataSource (e.g. WauTrustDataSource
+// wrapping MemoryDataSource + MemoryEngine). Production code typically uses
+// NewScheduler / NewSchedulerWithRegistry which build the default
+// ScoringEngine internally.
+func NewSchedulerWithScoring(reg registry.Registry, scoring *ScoringEngine, logger *slog.Logger) *Scheduler {
+	return &Scheduler{
+		reg:        reg,
+		scoring:    scoring,
+		logger:     logger,
 		stopCh:     make(chan struct{}),
 	}
 }
@@ -79,15 +129,27 @@ func (s *Scheduler) SetColdPolicy(policy *ColdRoutingPolicy) {
 	s.coldPolicy = policy
 }
 
+// SetSleepPolicy sets or replaces the sleep policy (v0.8.0 M4-2.2).
+//
+// Useful for dynamic policy updates without recreating the scheduler.
+// Pass nil to disable sleep filtering (backward-compat with v0.7.x + M4-1.4).
+func (s *Scheduler) SetSleepPolicy(policy *SleepPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sleepPolicy = policy
+}
+
 // Schedule 调度任务 - 选择最佳Agent
 //
-// v0.8.0 M4-1.4:如果设置了 coldPolicy,Schedule 会:
-//   1. 调 ScoreAgents 拿 15 维打分
-//   2. 调 coldPolicy.ShouldExplore(req.TaskID) 决定 explore vs warm
-//   3. explore → SelectCold 从 cold 池选;warm → 取最高分
-//   4. 无 cold 候选时,fallback warm 池
+// v0.8.0 M4-2.2 完整决策链:
+//   1. 获取在线 agents
+//   2. 15 维打分
+//   3. sleepPolicy != nil → 过滤 asleep agents(永远不参与 ranking)
+//   4. coldPolicy != nil → ShouldExplore + SelectCold 决策
+//   5. warm 路径 → 取最高分
+//   6. 无候选 → fallback warm / ErrNoAvailableAgent
 //
-// 否则(nil policy)走原 15 维打分,完全向后兼容。
+// 否则(nil policies)走原 15 维打分,完全向后兼容。
 func (s *Scheduler) Schedule(ctx context.Context, req *ScheduleRequest) (*ScheduleResult, error) {
 	// 1. 获取在线Agent
 	agents, err := s.reg.GetOnlineAgents(ctx)
@@ -122,7 +184,7 @@ func (s *Scheduler) Schedule(ctx context.Context, req *ScheduleRequest) (*Schedu
 		return nil, ErrNoAvailableAgent
 	}
 
-	// 4. 选择最佳Agent(15 维 + 可选 cold policy)
+	// 4. 选择最佳Agent(asleep 过滤 → cold routing → warm fallback)
 	reqID := ""
 	if req.Task != nil {
 		reqID = req.Task.TaskID
@@ -153,14 +215,39 @@ func (s *Scheduler) Schedule(ctx context.Context, req *ScheduleRequest) (*Schedu
 	return result, nil
 }
 
-// pickBest applies cold policy (if set) to choose among scored candidates.
-// Returns (chosen, coldRouted) where coldRouted=true means the choice
-// came from the cold explore pool rather than the warm 15-dim ranking.
+// pickBest applies sleep filter + cold policy (if set) to choose among
+// scored candidates.
+//
+// Decision chain (v0.8.0 M4-2.2):
+//   1. sleepPolicy.FilterAsleep → remove asleep agents from pool
+//   2. if all filtered out → return ErrNoAvailableAgent
+//   3. coldPolicy.ShouldExplore + SelectCold → cold explore path
+//   4. fallback: highest-score warm agent
+//
+// Returns (chosen, coldRouted). coldRouted=true means the choice came
+// from the cold explore pool rather than the warm 15-dim ranking.
 func (s *Scheduler) pickBest(ctx context.Context, scores []AgentScore, requestID string) (AgentScore, bool) {
 	s.mu.RLock()
 	policy := s.coldPolicy
+	sleep := s.sleepPolicy
 	s.mu.RUnlock()
 
+	// Step 1: filter asleep agents (v0.8.0 M4-2.2)
+	if sleep != nil {
+		scores = sleep.FilterAsleep(ctx, scores, s.scoring)
+		if len(scores) == 0 {
+			// All agents asleep — surface this as a routing failure so the
+			// caller can decide whether to trigger wake (or just retry later).
+			s.logger.Warn("all agents asleep, no eligible agent for routing",
+				"request_id", requestID,
+			)
+			// Return the highest-score asleep agent with coldRouted=false so
+			// the schedule can still proceed (caller may decide to wake it).
+			return AgentScore{}, false
+		}
+	}
+
+	// Step 2: cold routing path (v0.8.0 M4-1.4)
 	if policy == nil {
 		// No cold policy → highest score (legacy v0.7.x behavior)
 		return scores[0], false
