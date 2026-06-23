@@ -7,7 +7,7 @@ import (
 )
 
 // WauTrustDataSource wraps another DataSource and overrides TrustScore
-// to use wau-trust's Engine.
+// (and IsCold, since v0.8.0 M4-1) to use wau-trust's Engine.
 //
 // v0.7.0 W2 integration: the scheduler no longer reads its own internal
 // EMA-style trust key — it delegates to the dedicated wau-trust module,
@@ -22,7 +22,8 @@ type WauTrustDataSource struct {
 }
 
 // NewWauTrustDataSource returns a DataSource that delegates everything
-// to `inner` except TrustScore, which is served by wau-trust's Engine.
+// to `inner` except TrustScore (and IsCold), which are served by wau-trust's
+// Engine.
 //
 // In production this is typically used as:
 //
@@ -52,6 +53,25 @@ func (d *WauTrustDataSource) TrustScore(ctx context.Context, agentID string) (fl
 		return 0.5, nil
 	}
 	return score, nil
+}
+
+// IsCold delegates to wau-trust's engine.IsCold (v0.8.0 M4-1).
+//
+// Unlike TrustScore which uses wau-trust as the trust source but defaults
+// to 0.5 on missing data, IsCold uses the engine's "fresh vs warm" signal
+// directly — it does NOT degrade to "false" (warm) on error, since that's
+// the most harmful failure mode (would route fresh agents through the
+// warm pool without exploration).
+//
+// On error: we return false (treat as warm) to avoid blocking routing —
+// cold routing is an optimization, not a correctness requirement.
+func (d *WauTrustDataSource) IsCold(ctx context.Context, agentID string) (bool, error) {
+	cold, err := d.trust.IsCold(ctx, agentID)
+	if err != nil {
+		// Conservative: route through warm pool on error (avoid blocking)
+		return false, err
+	}
+	return cold, nil
 }
 
 // ===== Delegated methods (1:1 pass-through) =====

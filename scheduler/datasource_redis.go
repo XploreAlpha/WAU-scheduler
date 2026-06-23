@@ -288,6 +288,26 @@ func (d *RedisDataSource) TrustScore(ctx context.Context, agentID string) (float
 	return val, nil
 }
 
+// IsCold reports whether the agent has no trust history (v0.8.0 M4-1).
+//
+// Implementation: aligns with wau-trust's Engine.IsCold — single EXISTS on
+// `trust:{name}`. Cold routing's primary goal is to give fresh agents a
+// chance to accumulate trust data; once trust is recorded (even 1
+// RecordSuccess), the agent is no longer cold from a routing perspective.
+//
+// Why NOT also check tasks:total / metrics:
+//   - Trust signal is the canonical "data exists" indicator for cold routing
+//   - Keeping the semantics aligned with wau-trust.IsCold means callers
+//     (cold routing policy in M4-1.3) get a single, consistent signal
+//   - Single EXISTS is O(1) — keeps the cold path cheap
+func (d *RedisDataSource) IsCold(ctx context.Context, agentID string) (bool, error) {
+	n, err := d.client.Exists(ctx, d.key(agentID, "trust")).Result()
+	if err != nil {
+		return false, fmt.Errorf("isCold for %s: %w", agentID, err)
+	}
+	return n == 0, nil
+}
+
 // GetMeta returns extended agent metadata.
 //
 // v0.7.0 W1: derived from AgentCard + defaults. W2 will extend

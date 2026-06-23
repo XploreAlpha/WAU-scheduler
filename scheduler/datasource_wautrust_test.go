@@ -96,3 +96,73 @@ func TestWauTrustDataSource_NonTrustMethodsDelegate(t *testing.T) {
 		t.Errorf("GetMeta should pass through, got region %q", m.Region)
 	}
 }
+
+// ============== IsCold 透传测试 (v0.8.0 M4-1) ==============
+
+// TestWauTrustDataSource_IsCold_Delegates: IsCold 直接透传到 wau-trust engine,
+// 不走 inner DataSource。这样 scheduler 冷路由信号源是 wau-trust(单一真相),
+// 跟 MemoryEngine / RedisEngine.IsCold 语义一致。
+func TestWauTrustDataSource_IsCold_Delegates(t *testing.T) {
+	ctx := context.Background()
+	trust := engine.NewMemoryEngine()
+
+	// inner DataSource 不应该被 IsCold 调到 — 设一个错误信号验证
+	inner := NewMemoryDataSource(nil)
+	inner.SetTrustScore("Whis", 0.99) // inner 认为 warm
+	_ = inner.SetTotalTasks
+
+	ds := NewWauTrustDataSource(inner, trust)
+
+	// 1. fresh agent → wau-trust.IsCold=true(无 Record)
+	cold, err := ds.IsCold(ctx, "fresh-agent")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if !cold {
+		t.Error("fresh agent should be cold (no wau-trust history)")
+	}
+
+	// 2. Record 1 次 success → wau-trust.IsCold=false(warm)
+	_ = trust.RecordSuccess(ctx, "Whis", 0.1)
+	cold, err = ds.IsCold(ctx, "Whis")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if cold {
+		t.Error("after RecordSuccess, agent should be warm regardless of inner DataSource state")
+	}
+
+	// 3. Reset 后 → wau-trust.IsCold=true(Reset = cold 重新 explore)
+	_ = trust.Reset(ctx, "Whis")
+	cold, err = ds.IsCold(ctx, "Whis")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if !cold {
+		t.Error("after Reset, agent should be cold again")
+	}
+}
+
+// TestWauTrustDataSource_IsCold_NotInnerSource: 显式验证 inner DataSource
+// 不被 IsCold 调用。如果 inner 信号跟 wau-trust 冲突,IsCold 应该只听 wau-trust 的。
+func TestWauTrustDataSource_IsCold_NotInnerSource(t *testing.T) {
+	ctx := context.Background()
+	trust := engine.NewMemoryEngine()
+
+	// inner DataSource 标 agent 为 warm(有 trust score)
+	inner := NewMemoryDataSource(nil)
+	inner.SetTrustScore("agent-1", 0.8)
+	inner.SetTotalTasks("agent-1", 50)
+
+	ds := NewWauTrustDataSource(inner, trust)
+
+	// wau-trust 完全不知道 agent-1(fresh)
+	// inner 认为 warm,IsCold 必须返 true(只听 wau-trust)
+	cold, err := ds.IsCold(ctx, "agent-1")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if !cold {
+		t.Error("IsCold should ignore inner DataSource and only listen to wau-trust")
+	}
+}

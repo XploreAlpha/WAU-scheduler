@@ -324,3 +324,51 @@ func absDelta(a, b float64) float64 {
 	}
 	return d
 }
+
+// ============== IsCold 测试 (v0.8.0 M4-1) ==============
+
+// TestScoringEngine_IsCold_DelegatesToDS: ScoringEngine.IsCold 应该透传 DataSource.IsCold
+func TestScoringEngine_IsCold_DelegatesToDS(t *testing.T) {
+	ctx := context.Background()
+	logger := testLogger()
+
+	ds := NewMemoryDataSource(nil)
+	eng := NewScoringEngineWithDataSource(nil, ds, logger)
+
+	// fresh agent → cold(透传到 ds)
+	cold, err := eng.IsCold(ctx, "fresh")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if !cold {
+		t.Error("expected fresh agent to be cold")
+	}
+
+	// trust set → warm
+	ds.SetTrustScore("warm", 0.5)
+	cold, err = eng.IsCold(ctx, "warm")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if cold {
+		t.Error("expected agent with trust to be warm")
+	}
+}
+
+// TestScoringEngine_IsCold_NilDS_ReturnsFalse: ds=nil(legacy mode)→ 永远 warm
+// (向后兼容 v0.7.x,无 cold 概念)
+func TestScoringEngine_IsCold_NilDS_ReturnsFalse(t *testing.T) {
+	ctx := context.Background()
+	logger := testLogger()
+
+	// 直接构造,不通过 NewScoringEngineWithDataSource(那个会强制 ds!=nil)
+	eng := &ScoringEngine{logger: logger, weights: DefaultWeights()}
+
+	cold, err := eng.IsCold(ctx, "any-agent")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if cold {
+		t.Error("legacy mode (nil ds) should return cold=false to preserve v0.7.x behavior")
+	}
+}

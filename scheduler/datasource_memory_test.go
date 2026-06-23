@@ -212,6 +212,127 @@ func TestMemoryDataSource_TrustScore(t *testing.T) {
 	}
 }
 
+// ============== IsCold 测试 (v0.8.0 M4-1) ==============
+//
+// IsCold 信号是冷路由(M4-1.3)的关键 — 必须严格区分 fresh agent vs warm agent。
+// GetScore 永远对两者返 0.5,IsCold 是唯一信号。
+
+func TestMemoryDataSource_IsCold(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		setupFunc func(*MemoryDataSource) // 每个 test 独立设数据,避免污染
+		agentID   string
+		wantCold  bool
+		desc      string
+	}{
+		{
+			name: "fresh agent → cold",
+			setupFunc: func(d *MemoryDataSource) {
+				// 不设任何数据
+			},
+			agentID:  "fresh-agent",
+			wantCold: true,
+			desc:     "no trust, no tasks → cold",
+		},
+		{
+			name: "trust only → warm (no tasks yet)",
+			setupFunc: func(d *MemoryDataSource) {
+				d.SetTrustScore("t-only", 0.7)
+			},
+			agentID:  "t-only",
+			wantCold: false,
+			desc:     "trust set → warm even without task history (trust is canonical signal)",
+		},
+		{
+			name: "tasks only (no trust) → cold",
+			setupFunc: func(d *MemoryDataSource) {
+				d.SetTotalTasks("k-only", 5)
+			},
+			agentID:  "k-only",
+			wantCold: true,
+			desc:     "tasks set but trust not recorded → cold (trust is canonical signal for IsCold)",
+		},
+		{
+			name: "trust + 1 task → warm",
+			setupFunc: func(d *MemoryDataSource) {
+				d.SetTrustScore("warm-1", 0.6)
+				d.SetTotalTasks("warm-1", 1)
+			},
+			agentID:  "warm-1",
+			wantCold: false,
+			desc:     "1 task done with trust → warm",
+		},
+		{
+			name: "trust + 100 tasks → warm",
+			setupFunc: func(d *MemoryDataSource) {
+				d.SetTrustScore("warm-100", 0.3)
+				d.SetTotalTasks("warm-100", 100)
+			},
+			agentID:  "warm-100",
+			wantCold: false,
+			desc:     "100 tasks done → warm regardless of trust value",
+		},
+		{
+			name: "trust=0 (failure mode) + tasks → warm",
+			setupFunc: func(d *MemoryDataSource) {
+				d.SetTrustScore("failed", 0.0)
+				d.SetTotalTasks("failed", 5)
+			},
+			agentID:  "failed",
+			wantCold: false,
+			desc:     "trust=0 means 'failed many times' → not cold (有数据)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 每个 subtest 用新 ds,避免 Map 污染
+			ds := NewMemoryDataSource(nil)
+			if tt.setupFunc != nil {
+				tt.setupFunc(ds)
+			}
+			got, err := ds.IsCold(ctx, tt.agentID)
+			if err != nil {
+				t.Fatalf("IsCold: %v", err)
+			}
+			if got != tt.wantCold {
+				t.Errorf("IsCold(%q) = %v, want %v (%s)", tt.agentID, got, tt.wantCold, tt.desc)
+			}
+		})
+	}
+}
+
+// TestMemoryDataSource_IsCold_Concurrent: 并发设数据不会让 IsCold 误判
+func TestMemoryDataSource_IsCold_Concurrent(t *testing.T) {
+	ctx := context.Background()
+	ds := NewMemoryDataSource(nil)
+
+	// 并发设 trust + tasks
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 100; i++ {
+			ds.SetTrustScore("hot", 0.5+float64(i%50)/100)
+		}
+		close(done)
+	}()
+	go func() {
+		for i := 0; i < 100; i++ {
+			ds.SetTotalTasks("hot", i+1)
+		}
+	}()
+	<-done
+
+	cold, err := ds.IsCold(ctx, "hot")
+	if err != nil {
+		t.Fatalf("IsCold: %v", err)
+	}
+	if cold {
+		t.Error("after 100 concurrent SetTrust + SetTotalTasks, agent should be warm")
+	}
+}
+
 func TestMemoryDataSource_GetMeta(t *testing.T) {
 	ctx := context.Background()
 	ds := NewMemoryDataSource(nil)

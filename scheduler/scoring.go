@@ -387,3 +387,27 @@ func (e *ScoringEngine) dimensionGeoPenalty(ctx context.Context, agentID string,
 	}
 	return v
 }
+
+// ============== v0.8.0 M4-1: cold routing helper ==============
+
+// IsCold reports whether the agent has no trust history (v0.8.0 M4-1).
+//
+// This is a thin wrapper over DataSource.IsCold, exposed on ScoringEngine
+// so that the cold routing policy (M4-1.3) has a single, consistent entry
+// point for cold detection.
+//
+// Behavior when ds == nil (backward compat with v0.7.x): returns false
+// (treat as warm), since the legacy 15-dim scoring had no notion of cold.
+// Cold routing is an optimization, not a correctness requirement, so
+// degrading to "warm" on missing ds is safe.
+func (e *ScoringEngine) IsCold(ctx context.Context, agentID string) (bool, error) {
+	if e.ds == nil {
+		return false, nil // legacy mode: no cold concept
+	}
+	cold, err := e.ds.IsCold(ctx, agentID)
+	if err != nil {
+		e.logger.Warn("IsCold failed", "agent", agentID, "err", err)
+		return false, err
+	}
+	return cold, nil
+}
