@@ -355,6 +355,18 @@ func (d *MemoryDataSource) IsAsleep(ctx context.Context, agentID string) (bool, 
 	return d.asleep[agentID], nil
 }
 
+// Replicate returns ErrReplicateNotImplemented (v0.8.0 M4-3.2).
+//
+// MemoryDataSource has no real wau-trust engine attached — it is an in-process
+// DataSource for unit tests and single-node dev environments. Tests that
+// need Replicate behavior should wrap MemoryDataSource with WauTrustDataSource
+// (which delegates to a real MemoryEngine / RedisEngine).
+//
+// Production path: RedisDataSource → wrap with WauTrustDataSource → engine.Replicate.
+func (d *MemoryDataSource) Replicate(ctx context.Context, parent, child string, inheritanceFactor float64) (float64, error) {
+	return 0, ErrReplicateNotImplemented
+}
+
 // GetMeta returns extended agent metadata.
 func (d *MemoryDataSource) GetMeta(ctx context.Context, agentID string) (AgentMeta, error) {
 	d.mu.RLock()

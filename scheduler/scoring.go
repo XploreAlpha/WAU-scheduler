@@ -431,3 +431,29 @@ func (e *ScoringEngine) IsAsleep(ctx context.Context, agentID string) (bool, err
 	}
 	return asleep, nil
 }
+
+// TrustScore returns the raw trust score for an agent (v0.8.0 M4-3.2).
+//
+// This is a thin wrapper over DataSource.TrustScore, exposed on ScoringEngine
+// so Scheduler.Replicate has a single, consistent entry point for trust reads
+// (parallel to IsCold / IsAsleep).
+//
+// Behavior when ds == nil (backward compat with v0.7.x): returns 0.5 (legacy
+// neutral default). Callers that need to distinguish "no data" from "trust 0.5"
+// should also check IsCold first — that's the recommended pattern in
+// Scheduler.Replicate (cold check before trust threshold check).
+//
+// Caveat: WauTrustDataSource.TrustScore coerces missing→0.5 for the 15-dim
+// ranking, but the cold signal is exposed via IsCold. For replication gating,
+// the chain is IsCold → ErrParentCold; else TrustScore → ErrParentLowTrust.
+func (e *ScoringEngine) TrustScore(ctx context.Context, agentID string) (float64, error) {
+	if e.ds == nil {
+		return 0.5, nil // legacy mode: no trust concept, neutral default
+	}
+	v, err := e.ds.TrustScore(ctx, agentID)
+	if err != nil {
+		e.logger.Warn("TrustScore failed", "agent", agentID, "err", err)
+		return 0.5, err
+	}
+	return v, nil
+}

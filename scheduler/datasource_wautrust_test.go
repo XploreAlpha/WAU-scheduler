@@ -166,3 +166,80 @@ func TestWauTrustDataSource_IsCold_NotInnerSource(t *testing.T) {
 		t.Error("IsCold should ignore inner DataSource and only listen to wau-trust")
 	}
 }
+
+// TestWauTrustDataSource_Replicate_Delegates verifies that Replicate
+// delegates to wau-trust's Engine.Replicate (v0.8.0 M4-3.2).
+//
+// Inner DataSource is intentionally given a "wrong" child score to prove
+// that Replicate is served by wau-trust, not the inner DataSource.
+//
+// Expected behavior:
+//   - parent "Whis" has trust ~0.85 in wau-trust (weight=0.7 → 0.5*0.3+0.7=0.85)
+//   - Replicate("Whis", "Whis-Child", 0.8) returns engine.ReplicateTrust(0.85, 0.8, ...)
+//     in [0.63, 0.73] (0.85*0.8 = 0.68 ± 0.05)
+//   - inner DataSource is bypassed entirely
+func TestWauTrustDataSource_Replicate_Delegates(t *testing.T) {
+	ctx := context.Background()
+	trust := engine.NewMemoryEngine()
+
+	// Inner DataSource has a wrong/old child score to prove override
+	inner := NewMemoryDataSource(nil)
+	inner.SetTrustScore("Whis-Child", 0.1) // intentionally wrong
+
+	// Warm Whis in wau-trust (trust ~0.85 with weight=0.7)
+	if err := trust.RecordSuccess(ctx, "Whis", 0.7); err != nil {
+		t.Fatalf("RecordSuccess: %v", err)
+	}
+
+	ds := NewWauTrustDataSource(inner, trust)
+
+	childScore, err := ds.Replicate(ctx, "Whis", "Whis-Child", engine.DefaultInheritanceFactor)
+	if err != nil {
+		t.Fatalf("Replicate: %v", err)
+	}
+
+	// Whis trust = 0.85, factor = 0.8 → child in [0.63, 0.73]
+	if childScore < 0.63 || childScore > 0.73 {
+		t.Errorf("Replicate child score: expected ~0.68 ± 0.05 (range [0.63, 0.73]), got %v", childScore)
+	}
+
+	// Verify determinism: pure helper should produce same value
+	expected := engine.ReplicateTrust(0.85, engine.DefaultInheritanceFactor, "Whis", "Whis-Child")
+	if childScore != expected {
+		t.Errorf("Replicate delegation: expected %v (via ReplicateTrust), got %v", expected, childScore)
+	}
+
+	// Verify child was actually written to wau-trust (proving delegation)
+	stored, err := trust.GetScore(ctx, "Whis-Child")
+	if err != nil {
+		t.Fatalf("GetScore after Replicate: %v", err)
+	}
+	if stored != childScore {
+		t.Errorf("stored child score: expected %v, got %v", childScore, stored)
+	}
+}
+
+// TestWauTrustDataSource_Replicate_PropagatesErrors verifies that engine
+// errors (ErrParentCold, ErrInvalidFactor) are returned unchanged through
+// the WauTrustDataSource delegation.
+func TestWauTrustDataSource_Replicate_PropagatesErrors(t *testing.T) {
+	ctx := context.Background()
+	trust := engine.NewMemoryEngine()
+	inner := NewMemoryDataSource(nil)
+	ds := NewWauTrustDataSource(inner, trust)
+
+	// Cold parent → engine.ErrParentCold
+	_, err := ds.Replicate(ctx, "Cold-Parent", "Child", engine.DefaultInheritanceFactor)
+	if err == nil || err.Error() == "" {
+		t.Errorf("expected error for cold parent, got nil")
+	}
+
+	// Invalid factor → engine.ErrInvalidFactor
+	if err := trust.RecordSuccess(ctx, "Whis", 0.5); err != nil {
+		t.Fatalf("RecordSuccess: %v", err)
+	}
+	_, err = ds.Replicate(ctx, "Whis", "Child", -0.5)
+	if err == nil {
+		t.Errorf("expected error for invalid factor, got nil")
+	}
+}

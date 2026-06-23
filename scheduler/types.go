@@ -131,3 +131,76 @@ const (
 	// DLQCapacity DLQ最大容量
 	DLQCapacity = 1000
 )
+
+// ChildSpec describes what a child agent should look like (v0.8.0 M4-3.2).
+//
+// Built by ReplicationPolicy.BuildChildSpec from the parent's AgentCard.
+// The kernel (WAU-core-kernel M4-3.3) uses this when calling registry.Heartbeat
+// to register the newly spawned child.
+//
+// Fields mirror registry.AgentCard but are scoped to the subset relevant for
+// replication. Skills are inherited by copy (not aliased) so callers may mutate
+// the spec without affecting the parent's AgentCard.
+type ChildSpec struct {
+	// ID — the proposed new agent ID (required, unique across the registry).
+	ID string
+
+	// Name — usually same as ID; reserved for future "alias" support.
+	Name string
+
+	// Skills — inherited from parent's AgentCard.Skills (copied, not aliased).
+	Skills []string
+
+	// Version — inherited from parent's AgentCard.Version.
+	Version string
+
+	// Universe — inherited from parent's AgentCard.Universe.
+	Universe string
+}
+
+// ReplicateDecision is what Scheduler.Replicate returns to the caller (v0.8.0 M4-3.2).
+//
+// Scheduler.Replicate is a pure decision function — it performs NO writes.
+// The caller (typically WAU-core-kernel M4-3.3) reads this struct and executes:
+//
+//  1. trustEngine.Replicate(ctx, decision.ParentID, decision.ChildID, decision.InheritanceFactor)
+//  2. registry.Heartbeat(ctx, child metadata from decision.ChildSpec)
+//  3. policy.RecordChild(decision.ParentID) — only after BOTH writes succeed
+//
+// On any policy violation (nil policy, parent cold/low trust, child limit reached,
+// etc.) Scheduler.Replicate returns (nil, error) instead of a decision. A non-nil
+// error means "do not act"; a non-nil decision means "ShouldReplicate=true, execute".
+//
+// Library boundary: wau-scheduler cannot call kernel RPCs (per design memory),
+// so the kernel-side execution is split out from this decision struct.
+type ReplicateDecision struct {
+	// ParentID — source of replication (echoed from input for caller convenience).
+	ParentID string
+
+	// ParentTrust — observed parent trust at decision time (from scoring engine).
+	// Useful for kernel-side logging / observability.
+	ParentTrust float64
+
+	// CurrentChildren — observed child count at decision time (from policy).
+	// Useful for kernel-side logging / observability.
+	CurrentChildren int
+
+	// ChildID — proposed new agent ID (echoed from input).
+	ChildID string
+
+	// InheritanceFactor — from policy (== engine.DefaultInheritanceFactor by default).
+	// Caller passes this to trustEngine.Replicate.
+	InheritanceFactor float64
+
+	// ExpectedChildTrust — computed via engine.ReplicateTrust (pure helper, no
+	// side effect). Caller should see the same value after calling
+	// trustEngine.Replicate — this is the deterministic-jitter guarantee.
+	ExpectedChildTrust float64
+
+	// ChildSpec — spec for caller to register via registry.Heartbeat.
+	ChildSpec ChildSpec
+
+	// Rationale — human-readable explanation including actual numbers.
+	// Example: "parent trust 0.92 ≥ 0.80, children 2 < 5".
+	Rationale string
+}

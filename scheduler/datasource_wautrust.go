@@ -93,6 +93,24 @@ func (d *WauTrustDataSource) IsAsleep(ctx context.Context, agentID string) (bool
 	return asleep, nil
 }
 
+// Replicate delegates to wau-trust's engine.Replicate (v0.8.0 M4-3.2).
+//
+// This is the production path for self-replication: wau-trust's Engine.Replicate
+// computes the child trust via deterministic jitter (FNV-1a hash of
+// "parent:child") and writes the result to the underlying store
+// (MemoryEngine for tests, RedisEngine for production).
+//
+// Scheduler-level policy gates (MinParentTrust, MaxChildrenPerParent) are
+// NOT enforced here — those live in ReplicationPolicy.CanReplicate, called
+// before this method by Scheduler.Replicate.
+//
+// Errors propagate unchanged from engine:
+//   - engine.ErrParentCold
+//   - engine.ErrInvalidFactor
+func (d *WauTrustDataSource) Replicate(ctx context.Context, parent, child string, inheritanceFactor float64) (float64, error) {
+	return d.trust.Replicate(ctx, parent, child, inheritanceFactor)
+}
+
 // ===== Delegated methods (1:1 pass-through) =====
 
 func (d *WauTrustDataSource) LatencyScore(ctx context.Context, agentID string) (float64, error) {

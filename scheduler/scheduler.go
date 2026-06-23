@@ -2,10 +2,12 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/XploreAlpha/wau-trust/engine"
 	"github.com/wau/registry/registry"
 )
 
@@ -23,6 +25,10 @@ type Scheduler struct {
 	// nil = 现有行为(不过滤 asleep agents,向后兼容 v0.7.x + M4-1.4)
 	sleepPolicy *SleepPolicy
 
+	// replicationPolicy is the self-replication policy (v0.8.0 M4-3.2).
+	// nil = 现有行为(无 Replicate 决策,向后兼容 v0.7.x + M4-1.4 + M4-2.2)
+	replicationPolicy *ReplicationPolicy
+
 	mu      sync.RWMutex
 	running bool
 	stopCh  chan struct{}
@@ -31,12 +37,13 @@ type Scheduler struct {
 // NewScheduler 创建调度器(无 cold policy,向后兼容 v0.7.x)
 func NewScheduler(reg *registry.RedisStore, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		reg:        reg,
-		scoring:    NewScoringEngine(reg, logger),
-		logger:     logger,
-		coldPolicy: nil,
-		sleepPolicy: nil,
-		stopCh:     make(chan struct{}),
+		reg:               reg,
+		scoring:           NewScoringEngine(reg, logger),
+		logger:            logger,
+		coldPolicy:        nil,
+		sleepPolicy:       nil,
+		replicationPolicy: nil, // v0.8.0 M4-3.2: disabled by default
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -47,12 +54,13 @@ func NewScheduler(reg *registry.RedisStore, logger *slog.Logger) *Scheduler {
 // 生产仍传 *registry.RedisStore(它实现了 registry.Registry interface)。
 func NewSchedulerWithRegistry(reg registry.Registry, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		reg:        reg,
-		scoring:    NewScoringEngine(reg, logger),
-		logger:     logger,
-		coldPolicy: nil,
-		sleepPolicy: nil,
-		stopCh:     make(chan struct{}),
+		reg:               reg,
+		scoring:           NewScoringEngine(reg, logger),
+		logger:            logger,
+		coldPolicy:        nil,
+		sleepPolicy:       nil,
+		replicationPolicy: nil, // v0.8.0 M4-3.2: disabled by default
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -67,12 +75,13 @@ func NewSchedulerWithRegistry(reg registry.Registry, logger *slog.Logger) *Sched
 //	result, _ := s.Schedule(ctx, req)  // 10% 概率走 cold explore
 func NewSchedulerWithColdPolicy(reg registry.Registry, logger *slog.Logger, coldPolicy *ColdRoutingPolicy) *Scheduler {
 	return &Scheduler{
-		reg:        reg,
-		scoring:    NewScoringEngine(reg, logger),
-		logger:     logger,
-		coldPolicy: coldPolicy,
-		sleepPolicy: nil,
-		stopCh:     make(chan struct{}),
+		reg:               reg,
+		scoring:           NewScoringEngine(reg, logger),
+		logger:            logger,
+		coldPolicy:        coldPolicy,
+		sleepPolicy:       nil,
+		replicationPolicy: nil, // v0.8.0 M4-3.2: disabled by default
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -94,12 +103,45 @@ func NewSchedulerWithColdPolicy(reg registry.Registry, logger *slog.Logger, cold
 //	result, _ := s.Schedule(ctx, req)
 func NewSchedulerWithSleepPolicy(reg registry.Registry, logger *slog.Logger, coldPolicy *ColdRoutingPolicy, sleepPolicy *SleepPolicy) *Scheduler {
 	return &Scheduler{
-		reg:         reg,
-		scoring:     NewScoringEngine(reg, logger),
-		logger:      logger,
-		coldPolicy:  coldPolicy,
-		sleepPolicy: sleepPolicy,
-		stopCh:      make(chan struct{}),
+		reg:               reg,
+		scoring:           NewScoringEngine(reg, logger),
+		logger:            logger,
+		coldPolicy:        coldPolicy,
+		sleepPolicy:       sleepPolicy,
+		replicationPolicy: nil, // v0.8.0 M4-3.2: disabled by default
+		stopCh:            make(chan struct{}),
+	}
+}
+
+// NewSchedulerWithReplicationPolicy creates a scheduler with cold + sleep +
+// replication policies enabled (v0.8.0 M4-3.2).
+//
+// All three policies are optional. This is the recommended constructor for
+// v0.8.0 production deployments that want the full W-3 智慧 initial set:
+// cold routing (M4-1) + sleep/wake (M4-2) + self-replication (M4-3).
+//
+// Usage:
+//
+//	coldPolicy := scheduler.NewColdRoutingPolicy(0.10, 10, 0.5, logger)
+//	sleepPolicy := scheduler.NewSleepPolicy(logger)
+//	replicationPolicy := scheduler.NewReplicationPolicy(logger)
+//	s := scheduler.NewSchedulerWithReplicationPolicy(reg, logger, coldPolicy, sleepPolicy, replicationPolicy)
+//	decision, _ := s.Replicate(ctx, "parent-agent", "child-agent")
+func NewSchedulerWithReplicationPolicy(
+	reg registry.Registry,
+	logger *slog.Logger,
+	coldPolicy *ColdRoutingPolicy,
+	sleepPolicy *SleepPolicy,
+	replicationPolicy *ReplicationPolicy,
+) *Scheduler {
+	return &Scheduler{
+		reg:               reg,
+		scoring:           NewScoringEngine(reg, logger),
+		logger:            logger,
+		coldPolicy:        coldPolicy,
+		sleepPolicy:       sleepPolicy,
+		replicationPolicy: replicationPolicy,
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -112,10 +154,11 @@ func NewSchedulerWithSleepPolicy(reg registry.Registry, logger *slog.Logger, col
 // ScoringEngine internally.
 func NewSchedulerWithScoring(reg registry.Registry, scoring *ScoringEngine, logger *slog.Logger) *Scheduler {
 	return &Scheduler{
-		reg:        reg,
-		scoring:    scoring,
-		logger:     logger,
-		stopCh:     make(chan struct{}),
+		reg:               reg,
+		scoring:           scoring,
+		logger:            logger,
+		replicationPolicy: nil, // v0.8.0 M4-3.2: replication disabled (tests add via SetReplicationPolicy)
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -137,6 +180,137 @@ func (s *Scheduler) SetSleepPolicy(policy *SleepPolicy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sleepPolicy = policy
+}
+
+// SetReplicationPolicy sets or replaces the replication policy (v0.8.0 M4-3.2).
+//
+// Useful for dynamic policy updates without recreating the scheduler.
+// Pass nil to disable replication (backward-compat with v0.7.x + M4-1.4 + M4-2.2).
+//
+// The kernel (WAU-core-kernel M4-3.3) holds a reference to the same policy
+// instance for the post-success RecordChild call, so swapping the policy here
+// also affects kernel bookkeeping (kernel should be re-initialized).
+func (s *Scheduler) SetReplicationPolicy(policy *ReplicationPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replicationPolicy = policy
+}
+
+// GetReplicationPolicy returns the current replication policy (may be nil).
+//
+// Convenience accessor for kernel code that needs to call RecordChild after
+// successful engine.Replicate + registry.Heartbeat.
+func (s *Scheduler) GetReplicationPolicy() *ReplicationPolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.replicationPolicy
+}
+
+// Replicate decides whether parent agent may spawn child, returning a
+// ReplicateDecision struct (v0.8.0 M4-3.2).
+//
+// LIBRARY BOUNDARY: Replicate performs NO writes. It is a pure decision
+// function that returns either (nil, error) on policy violation or
+// (*ReplicateDecision, nil) on success. The caller (typically WAU-core-kernel
+// M4-3.3) reads the decision and executes:
+//
+//	decision, err := s.Replicate(ctx, parentID, childID)
+//	if err != nil { return err }                       // policy violation
+//	trustEngine.Replicate(ctx, decision.ParentID,
+//	                       decision.ChildID,
+//	                       decision.InheritanceFactor)   // writes child trust
+//	registry.Heartbeat(ctx, child metadata from decision.ChildSpec)
+//	policy := s.GetReplicationPolicy()
+//	if policy != nil { policy.RecordChild(decision.ParentID) } // rate-limit counter
+//
+// Decision flow:
+//  1. replicationPolicy == nil       → ErrPolicyDisabled
+//  2. parentID == "" or childID == "" → ErrInvalidChildID
+//  3. parent not in registry          → ErrParentNotFound
+//  4. scoring.IsCold(parent) == true  → ErrParentCold
+//  5. policy.CanReplicate(trust, count) → ErrParentLowTrust / ErrChildLimitReached
+//  6. Build child spec (from parent card)
+//  7. Pre-compute expected child trust via engine.ReplicateTrust (pure helper)
+//  8. Return ReplicateDecision
+//
+// The decision is point-in-time; retries should re-call Replicate. Concurrent
+// decisions may differ if state changes between calls.
+func (s *Scheduler) Replicate(ctx context.Context, parentID, childID string) (*ReplicateDecision, error) {
+	s.mu.RLock()
+	policy := s.replicationPolicy
+	s.mu.RUnlock()
+
+	// 1. Policy disabled
+	if policy == nil {
+		return nil, ErrPolicyDisabled
+	}
+
+	// 2. Validate IDs
+	if parentID == "" || childID == "" {
+		return nil, ErrInvalidChildID
+	}
+
+	// 3. Parent exists in registry.
+	//    GetAgent may return (nil, err) for not-found, or (nil, nil) for
+	//    "agent missing but no error". Both are treated as ErrParentNotFound.
+	//    Other errors are wrapped with context.
+	parent, err := s.reg.GetAgent(ctx, parentID)
+	if err != nil {
+		if parent == nil {
+			return nil, ErrParentNotFound
+		}
+		return nil, fmt.Errorf("replicate parent lookup %s: %w", parentID, err)
+	}
+	if parent == nil {
+		return nil, ErrParentNotFound
+	}
+
+	// 4. Parent is cold (no trust data) — check BEFORE trust threshold
+	//    so cold parents get the more diagnostic error.
+	cold, coldErr := s.scoring.IsCold(ctx, parentID)
+	if coldErr != nil {
+		s.logger.Warn("IsCold failed during Replicate", "parent", parentID, "err", coldErr)
+		// Conservative: don't block on transient error, continue to trust check
+	} else if cold {
+		return nil, ErrParentCold
+	}
+
+	// 5. Trust + child count check
+	parentTrust, _ := s.scoring.TrustScore(ctx, parentID)
+	currentChildren := policy.ChildCount(parentID)
+	if err := policy.CanReplicate(parentTrust, currentChildren); err != nil {
+		s.logger.Info("replication denied by policy",
+			"parent", parentID,
+			"trust", parentTrust,
+			"children", currentChildren,
+			"err", err.Error(),
+		)
+		return nil, err
+	}
+
+	// 6. Build child spec + expected trust
+	spec := policy.BuildChildSpec(parent, childID)
+	expectedTrust := engine.ReplicateTrust(parentTrust, policy.InheritanceFactor, parentID, childID)
+
+	// 7. Return decision
+	decision := &ReplicateDecision{
+		ParentID:           parentID,
+		ParentTrust:        parentTrust,
+		CurrentChildren:    currentChildren,
+		ChildID:            childID,
+		InheritanceFactor:  policy.InheritanceFactor,
+		ExpectedChildTrust: expectedTrust,
+		ChildSpec:          spec,
+		Rationale:          policy.RationaleFor(parentID, parentTrust, currentChildren),
+	}
+	s.logger.Info("replication decision: allowed",
+		"parent", parentID,
+		"child", childID,
+		"expected_trust", expectedTrust,
+		"factor", policy.InheritanceFactor,
+		"current_children", currentChildren,
+	)
+	return decision, nil
 }
 
 // Schedule 调度任务 - 选择最佳Agent
