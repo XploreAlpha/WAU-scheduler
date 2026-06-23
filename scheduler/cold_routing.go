@@ -102,8 +102,12 @@ func DefaultColdRoutingPolicy(logger *slog.Logger) *ColdRoutingPolicy {
 }
 
 // normalize applies defaults to zero/negative fields.
+//
+// ExploreBudget == 1.0 is intentionally allowed (means 100% explore —
+// useful for tests and aggressive cold-pool strategies). Only values
+// strictly greater than 1.0 are invalid and reset to default.
 func (p *ColdRoutingPolicy) normalize() {
-	if p.ExploreBudget <= 0 || p.ExploreBudget >= 1.0 {
+	if p.ExploreBudget <= 0 || p.ExploreBudget > 1.0 {
 		p.ExploreBudget = DefaultExploreBudget
 	}
 	if p.WarmupThreshold <= 0 {

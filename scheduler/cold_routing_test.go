@@ -75,9 +75,16 @@ func TestColdRoutingPolicy_Normalize(t *testing.T) {
 			wantFloor:     DefaultSkillFloor,
 		},
 		{
-			name:          "budget >= 1.0 → default",
+			name:          "budget > 1.0 → default",
 			input:         &ColdRoutingPolicy{ExploreBudget: 1.5},
 			wantBudget:    DefaultExploreBudget,
+			wantThreshold: DefaultWarmupThreshold,
+			wantFloor:     DefaultSkillFloor,
+		},
+		{
+			name:          "budget == 1.0 → preserved (100% explore allowed)",
+			input:         &ColdRoutingPolicy{ExploreBudget: 1.0},
+			wantBudget:    1.0,
 			wantThreshold: DefaultWarmupThreshold,
 			wantFloor:     DefaultSkillFloor,
 		},
