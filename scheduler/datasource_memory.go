@@ -32,6 +32,9 @@ type MemoryDataSource struct {
 	// Static data per agent
 	metas map[string]AgentMeta
 
+	// v0.8.0 M4-2: sleep state (mirrors wau-trust Engine.IsAsleep)
+	asleep map[string]bool
+
 	// Kernel config
 	config DataSourceConfig
 
@@ -56,6 +59,7 @@ func NewMemoryDataSource(card registry.Registry, opts ...DataSourceOption) *Memo
 		bandwidths:  make(map[string]float64),
 		trustScores: make(map[string]float64),
 		metas:       make(map[string]AgentMeta),
+		asleep:      make(map[string]bool), // v0.8.0 M4-2
 		config:      cfg,
 		card:        card,
 	}
@@ -111,6 +115,21 @@ func (d *MemoryDataSource) SetMeta(agentID string, meta AgentMeta) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.metas[agentID] = meta
+}
+
+// SetAsleep marks the agent as asleep or awake (v0.8.0 M4-2).
+//
+// Test helper: directly sets the asleep flag without going through wau-trust.
+// For production paths, callers should call wau-trust Engine.Sleep/Wake and
+// let the WauTrustDataSource pick up the change via IsAsleep delegation.
+func (d *MemoryDataSource) SetAsleep(agentID string, asleep bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if asleep {
+		d.asleep[agentID] = true
+	} else {
+		delete(d.asleep, agentID)
+	}
 }
 
 // ===== DataSource interface implementation =====
@@ -320,6 +339,20 @@ func (d *MemoryDataSource) IsCold(ctx context.Context, agentID string) (bool, er
 	defer d.mu.RUnlock()
 	_, hasTrust := d.trustScores[agentID]
 	return !hasTrust, nil
+}
+
+// IsAsleep reports whether the agent is currently asleep (v0.8.0 M4-2).
+//
+// Implementation: aligns with wau-trust's Engine.IsAsleep — checks the local
+// asleep map (set via SetAsleep test helper). In production, the
+// WauTrustDataSource delegates to wau-trust engine directly.
+//
+// Distinct from IsCold: a cold agent is not asleep; an asleep agent has
+// trust data but is currently excluded from scheduling.
+func (d *MemoryDataSource) IsAsleep(ctx context.Context, agentID string) (bool, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.asleep[agentID], nil
 }
 
 // GetMeta returns extended agent metadata.

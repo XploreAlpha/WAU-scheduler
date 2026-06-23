@@ -411,3 +411,23 @@ func (e *ScoringEngine) IsCold(ctx context.Context, agentID string) (bool, error
 	}
 	return cold, nil
 }
+
+// IsAsleep reports whether the agent is currently asleep (v0.8.0 M4-2).
+//
+// This is a thin wrapper over DataSource.IsAsleep, exposed on ScoringEngine
+// so that the sleep policy (M4-2.2) has a single, consistent entry point.
+//
+// Behavior when ds == nil (backward compat with v0.7.x): returns false
+// (treat as awake), since v0.7.x had no concept of sleep. Sleep is a
+// resource-saving optimization, not a correctness requirement.
+func (e *ScoringEngine) IsAsleep(ctx context.Context, agentID string) (bool, error) {
+	if e.ds == nil {
+		return false, nil // legacy mode: no sleep concept
+	}
+	asleep, err := e.ds.IsAsleep(ctx, agentID)
+	if err != nil {
+		e.logger.Warn("IsAsleep failed", "agent", agentID, "err", err)
+		return false, err
+	}
+	return asleep, nil
+}
