@@ -162,6 +162,26 @@ func NewSchedulerWithScoring(reg registry.Registry, scoring *ScoringEngine, logg
 	}
 }
 
+// SetScoringEngine sets or replaces the ScoringEngine (v0.8.0 M4-3.3 prep).
+//
+// Useful for callers (e.g. WAU-core-kernel M4-3.3) that construct a Scheduler
+// via NewSchedulerWithReplicationPolicy (which builds the default ScoringEngine
+// internally) but later want to inject a shared *ScoringEngine — typically one
+// already used by the kernel's Schedule flow, so both code paths read
+// consistent trust/15-dim state.
+//
+// Pass nil to fall back to a fresh default ScoringEngine.
+//
+// Note: Scheduler.Replicate (M4-3.2) reads scoring.IsCold and scoring.TrustScore
+// through the ScoringEngine. Kernel can construct scheduler via
+// NewSchedulerWithReplicationPolicy (auto-default scoring) then call this setter
+// to point at the kernel's shared *ScoringEngine.
+func (s *Scheduler) SetScoringEngine(scoring *ScoringEngine) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scoring = scoring
+}
+
 // SetColdPolicy sets or replaces the cold routing policy (v0.8.0 M4-1.4).
 //
 // Useful for dynamic policy updates without recreating the scheduler.
