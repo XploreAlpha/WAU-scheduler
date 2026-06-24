@@ -35,6 +35,29 @@ func NewWauTrustDataSource(inner DataSource, trust engine.Engine) *WauTrustDataS
 	return &WauTrustDataSource{inner: inner, trust: trust}
 }
 
+// NewDefaultWauTrustDataSource v0.8.0 M4-3.3: 简便工厂,用 in-process MemoryEngine
+// 构造 *WauTrustDataSource(跟 NewDefaultTrustDataSource 行为一致但返 *WauTrustDataSource,
+// 提供 Replicate 等 wau-trust 原语访问)。
+//
+// 为什么需要这个:WAU-core-kernel M4-3.3 ReplicateAgent 流程需要调 Replicate 原语,
+// 而 *TrustDataSource(facade)不暴露 Replicate。kernel 不应该直接 import wau-trust
+// (per [[feedback-dev-style]] + v0.7.0 W2 设计 'kernel 通过 wau-scheduler proxy trust'),
+// 所以 wau-scheduler 加这个工厂方法把 *WauTrustDataSource + MemoryEngine 一并包好。
+//
+// Replicate 行为契约: 委托 wau-trust engine.Replicate,返回 (child_trust, error)。
+// Errors 透传: engine.ErrParentCold, engine.ErrInvalidFactor。
+//
+// 用法:
+//
+//	trustDS := wauScheduler.NewDefaultWauTrustDataSource()  // *WauTrustDataSource
+//	childScore, err := trustDS.Replicate(ctx, "parent", "child", 0.8)
+func NewDefaultWauTrustDataSource() *WauTrustDataSource {
+	return &WauTrustDataSource{
+		inner: NewMemoryDataSource(nil),  // 占位 inner,无 registry 不影响 TrustScore/IsCold/IsAsleep/Replicate
+		trust: engine.NewMemoryEngine(),
+	}
+}
+
 // TrustScore delegates to wau-trust engine.
 //
 // wau-trust's Engine.GetScore returns (0.0, nil) when an agent has never
