@@ -156,6 +156,28 @@ func (d *WauTrustDataSource) RollbackReplicate(ctx context.Context, parent, chil
 	return d.trust.RollbackReplicate(ctx, parent, child)
 }
 
+// RecordSuccess delegates to wau-trust engine.RecordSuccess (v0.8.0 hotfix 4-prereq).
+//
+// Use case: external systems (e.g. integration tests, manual trust injection,
+// post-task success callbacks) want to push trust history into the same
+// engine that scheduler.Replicate / WauTrustDataSource.Replicate read from,
+// without having to reach the engine directly (which is private).
+//
+// This mirrors TrustDataSource.RecordSuccess (the wau-trust facade) so
+// callers have a uniform API regardless of which wrapper they hold.
+//
+// Errors propagate unchanged from engine.
+func (d *WauTrustDataSource) RecordSuccess(ctx context.Context, agentID string, weight float64) error {
+	return d.trust.RecordSuccess(ctx, agentID, weight)
+}
+
+// RecordFailure delegates to wau-trust engine.RecordFailure.
+//
+// Errors propagate unchanged from engine.
+func (d *WauTrustDataSource) RecordFailure(ctx context.Context, agentID string, weight float64) error {
+	return d.trust.RecordFailure(ctx, agentID, weight)
+}
+
 // ===== Delegated methods (1:1 pass-through) =====
 
 func (d *WauTrustDataSource) LatencyScore(ctx context.Context, agentID string) (float64, error) {
