@@ -134,6 +134,28 @@ func (d *WauTrustDataSource) Replicate(ctx context.Context, parent, child string
 	return d.trust.Replicate(ctx, parent, child, inheritanceFactor)
 }
 
+// RollbackReplicate delegates to wau-trust's engine.RollbackReplicate
+// (v0.8.0 hotfix 1).
+//
+// Use case: WAU-core-kernel.ReplicateAgent does 3 writes
+// (trust → registry.Heartbeat → counter). If trust write succeeds but
+// registry.Heartbeat fails, the kernel calls this to undo the trust write
+// and avoid leaving an orphan trust entry.
+//
+// Trampling check: engine.RollbackReplicate verifies the child's most
+// recent history entry is ReasonReplicate before deleting. If a concurrent
+// writer has modified the child since the Replicate, returns
+// engine.ErrNotReplicated and does NOT delete (caller should log warning).
+//
+// Idempotent: returns nil if the child has no history (never replicated,
+// already rolled back, or Reset since).
+//
+// Errors propagate unchanged from engine:
+//   - engine.ErrNotReplicated: trampling check failed
+func (d *WauTrustDataSource) RollbackReplicate(ctx context.Context, parent, child string) error {
+	return d.trust.RollbackReplicate(ctx, parent, child)
+}
+
 // ===== Delegated methods (1:1 pass-through) =====
 
 func (d *WauTrustDataSource) LatencyScore(ctx context.Context, agentID string) (float64, error) {
