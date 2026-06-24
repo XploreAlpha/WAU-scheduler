@@ -118,6 +118,25 @@ type DataSource interface {
 	// the scheduling pool and to identify wake candidates during demand spikes.
 	IsAsleep(ctx context.Context, agentID string) (bool, error)
 
+	// Replicate creates a child trust entry via the underlying trust engine (v0.8.0 M4-3.2).
+	//
+	// Returns the actual computed child trust score after the engine applies
+	// deterministic jitter + clamp. The engine writes the child score on success.
+	//
+	// Errors:
+	//   - ErrReplicateNotImplemented: DataSource doesn't support Replicate
+	//     (legacy mode or stub impl). Production callers must wrap with
+	//     WauTrustDataSource (which delegates to wau-trust Engine.Replicate).
+	//   - engine.ErrParentCold: parent has no trust data — caller should warm
+	//     up via cold routing first.
+	//   - engine.ErrInvalidFactor: inheritanceFactor out of [0.0, 1.0].
+	//
+	// Scheduler-level policy gates (MinParentTrust, MaxChildrenPerParent) are
+	// NOT enforced here — those live in ReplicationPolicy.CanReplicate. The
+	// engine itself also does not enforce MinParentTrust (per engine godoc);
+	// the scheduler policy is the single source of truth for that gate.
+	Replicate(ctx context.Context, parent, child string, inheritanceFactor float64) (float64, error)
+
 	// ===== Agent metadata =====
 
 	// GetMeta returns extended metadata for the agent.

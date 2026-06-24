@@ -339,6 +339,20 @@ func (d *RedisDataSource) GetMeta(ctx context.Context, agentID string) (AgentMet
 	return agentMetaFromCard(card), nil
 }
 
+// Replicate returns ErrReplicateNotImplemented (v0.8.0 M4-3.2).
+//
+// RedisDataSource has no real wau-trust engine attached — trust lives in
+// the wau-trust module, not in scheduler's Redis keys. Production callers
+// MUST wrap RedisDataSource with WauTrustDataSource (which delegates to
+// wau-trust Engine.Replicate, backed by Redis with the "wau:trust:" prefix).
+//
+// This stub preserves the DataSource interface contract while making the
+// production path explicit. See Makefile / NewSchedulerWithReplicationPolicy
+// examples for the recommended setup.
+func (d *RedisDataSource) Replicate(ctx context.Context, parent, child string, inheritanceFactor float64) (float64, error) {
+	return 0, ErrReplicateNotImplemented
+}
+
 // ===== Helpers =====
 
 func parseSemver(v string) (major, minor, patch int) {
