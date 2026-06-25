@@ -15,6 +15,6 @@ require (
 
 replace github.com/XploreAlpha/wau-trust => /home/inamoto888/project/wau-trust
 
-replace github.com/wau/registry => ../wau-registry-m5b3
+replace github.com/wau/registry => ../wau-registry
 
-replace github.com/wau/registry/registry => ../wau-registry-m5b3/registry
+replace github.com/wau/registry/registry => ../wau-registry/registry
