@@ -48,6 +48,13 @@ type ScoreRequest struct {
 	Urgency        string
 	SourceUniverse string
 	SourceRegion   string // v0.7.0 W2: GeoPenalty
+
+	// v0.8.0 M5-1 B.3: SourceUniverseLabels 算力调度标签
+	//   - 透传给 calcNetworkPenalty 做 label 加权
+	//   - nil/空 = 老行为(只比较 Universe string)
+	//   - 当前维度只比较 "region" key(per W-6 §决策 2:同 region 加分)
+	//   - K8s Node Affinity 渲染留 v1.0+
+	SourceUniverseLabels map[string]string
 }
 
 // ScoreAgents 对Agent列表进行评分 (线程安全)
@@ -114,7 +121,8 @@ func (e *ScoringEngine) scoreAgent(ctx context.Context, agentID string, req *Sco
 		SuccessRate: e.dimensionSuccessRate(ctx, agentID),
 
 		// 7. 网络惩罚 (0.7-1.0) — 已有,W1 维持
-		NetworkPenalty: e.calcNetworkPenalty(card.Universe, req.SourceUniverse),
+		//    v0.8.0 M5-1 B.3: 同 universe 时进一步按 region label 细分(1.0 vs 0.95)
+		NetworkPenalty: e.calcNetworkPenalty(card.Universe, card.UniverseLabels, req.SourceUniverse, req.SourceUniverseLabels),
 
 		// 8. 带宽可用性 (0-1) — v0.7.0 W1 真算(从心跳)
 		BandwidthScore: e.dimensionBandwidthScore(ctx, agentID),
@@ -210,16 +218,43 @@ func (e *ScoringEngine) calcLoadScore(load *registry.AgentLoad) float64 {
 }
 
 // calcNetworkPenalty 计算网络惩罚
-func (e *ScoringEngine) calcNetworkPenalty(agentUniverse, sourceUniverse string) float64 {
+//
+// v0.8.0 M5-1 B.3 扩展:同 universe 时进一步按 region label 细分
+//   - 跨 universe:0.7(老逻辑)
+//   - 同 universe + 同 region label:1.0(无惩罚)
+//   - 同 universe + 跨 region label:0.95(轻微惩罚,优先选同 region)
+//   - 同 universe + 一方缺 region label:1.0(降级,等同无标签,避免误判)
+//
+// label 校验(是否 snake_case / 是否 reserved)在 kernel ValidateUniverseLabels 负责,
+// 这里只读取 key="region" 的值
+func (e *ScoringEngine) calcNetworkPenalty(
+	agentUniverse string,
+	agentLabels map[string]string,
+	sourceUniverse string,
+	sourceLabels map[string]string,
+) float64 {
 	if sourceUniverse == "" {
 		return 1.0
 	}
 
-	if agentUniverse == sourceUniverse {
-		return 1.0 // 同Universe，无惩罚
+	if agentUniverse != sourceUniverse {
+		return 0.7 // 跨Universe惩罚(老逻辑)
 	}
 
-	return 0.7 // 跨Universe惩罚
+	// 同 Universe,按 region label 细分
+	agentRegion, agentHasRegion := agentLabels["region"]
+	sourceRegion, sourceHasRegion := sourceLabels["region"]
+
+	// 缺 label → 降级(等同无标签,避免误判)
+	if !agentHasRegion || !sourceHasRegion {
+		return 1.0
+	}
+
+	if agentRegion == sourceRegion {
+		return 1.0 // 同 region,无惩罚
+	}
+
+	return 0.95 // 同 universe 但跨 region,轻微惩罚
 }
 
 // ===== v0.7.0 W1: 7 维 dimension 函数(走 DataSource) =====
