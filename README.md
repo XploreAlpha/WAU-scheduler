@@ -161,6 +161,40 @@ wau-scheduler/
 
 ---
 
+## v0.9.0 "Acorn" 收口段(2026-09-15 GA)
+
+上文详细介绍了 v0.3.0-v0.8.0 实装历史 + 测试 + 编译段。本段为 v0.9.0 GA 增量补充。
+
+### 角色
+
+| OS 类比 | Process Scheduler(进程调度器)|
+|---|---|
+| 部署 | 独立 git 仓 = `wau-scheduler`,WAU-core-kernel 6 子模块之一 |
+| 通信 | gRPC 接收 WAU-core-kernel 调度请求 / 与其他 5 子模块协作 |
+| 状态 | v0.8.0 GA 已发(2026-07-13)|
+
+### v0.9.0 集成
+
+- **接 WAU-core-kernel**:Task 队列化 + Worker 池 + 优先级
+- **降级方案**:W-6 调度失败 → 走 fallback 队列 → 仍可执行
+- **3 新仓接入**:wau-edge / wau-llm-router / wau-channel 都通过 WAU-core-kernel 间接调度到本仓
+- **不破 wire**:Task 提交协议(per WAU-core-kernel/proto/task.proto)100% 保留
+
+### v0.9.0 "Acorn" 5 份核心文档
+
+| # | 文件 | 内容 |
+|---|---|---|
+| 1 | [README.md](README.md)(本文件)| 仓入口 + 实装历史 + v0.9.0 收口段 |
+| 2 | [QUICKSTART.md](QUICKSTART.md) | 15 分钟跑通最小场景 |
+| 3 | [DEPLOY.md](DEPLOY.md) | 部署 + Worker 池配置 |
+| 4 | [ARCHITECTURE.md](ARCHITECTURE.md) | 模块拆分 + 数据流 |
+| 5 | [CHANGELOG.md](CHANGELOG.md) | v0.8.0 + v0.9.0 倒序 |
+
+### 历史锚点
+
+- v0.8.0 GA([[project-v0.8.0-GA-2026-07-13]])
+- v0.9.0 主 plan([[project-v0-9-0-development-plan-2026-06-27]])
+
 ## 编译验证
 
 ```bash
